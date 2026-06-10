@@ -1,10 +1,12 @@
 # Synaesthesia Engine
 
-A generative visualizer that runs in the browser. One HTML file, no build, no dependencies.
+What does a sound look like?
 
-**Live:** https://nodesaint.github.io/synaesthesia-engine/
+Move your cursor and find out. A generative visualizer that turns motion into light — built as a single HTML file. No build, no dependencies, nothing to install.
 
-## Run it
+**See it:** https://nodesaint.github.io/synaesthesia-engine/
+
+## Run it locally
 
 Open `index.html`, or serve the folder:
 
