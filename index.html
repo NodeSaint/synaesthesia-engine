@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>SYNAESTHESIA ENGINE</title>
+<style>
+  :root{
+    --ink:#06070a; --hud:#9aa3b2; --hud-dim:#5a626f; --accent:#ffd166;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:var(--ink);overflow:hidden;font-family:'SF Mono','Cascadia Code','Fira Code',ui-monospace,monospace}
+  #stage{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+  /* HUD */
+  #hud{position:fixed;top:14px;left:16px;color:var(--hud);font-size:11px;letter-spacing:.14em;line-height:1.9;pointer-events:none;text-transform:uppercase;mix-blend-mode:screen}
+  #hud .t{color:#e8ecf3;font-size:12px;letter-spacing:.32em}
+  #hud .dim{color:var(--hud-dim)}
+  #counter{color:var(--accent)}
+  #controls{position:fixed;bottom:16px;left:16px;display:flex;gap:8px;z-index:5}
+  button.ctl{background:rgba(10,12,18,.55);border:1px solid #2a3140;color:var(--hud);font-family:inherit;font-size:10px;letter-spacing:.18em;text-transform:uppercase;padding:9px 14px;cursor:pointer;backdrop-filter:blur(6px);transition:border-color .2s,color .2s}
+  button.ctl:hover,button.ctl:focus-visible{border-color:var(--accent);color:#fff;outline:none}
+  button.ctl[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+  #hint{position:fixed;bottom:18px;right:18px;color:var(--hud-dim);font-size:10px;letter-spacing:.16em;text-transform:uppercase;pointer-events:none}
+  /* Start overlay */
+  #overlay{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 45%, #0c0f16 0%, #06070a 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;z-index:10;transition:opacity .8s}
+  #overlay.gone{opacity:0;pointer-events:none}
+  #overlay h1{color:#e8ecf3;font-size:clamp(18px,3.4vw,30px);font-weight:500;letter-spacing:.55em;text-indent:.55em;text-transform:uppercase}
+  #overlay p{color:var(--hud-dim);font-size:11px;letter-spacing:.2em;text-transform:uppercase;max-width:520px;text-align:center;line-height:2.1;padding:0 24px}
+  #begin{background:none;border:1px solid #3a4254;color:#e8ecf3;font-family:inherit;font-size:12px;letter-spacing:.4em;text-indent:.4em;text-transform:uppercase;padding:16px 42px;cursor:pointer;transition:all .25s}
+  #begin:hover,#begin:focus-visible{border-color:var(--accent);color:var(--accent);box-shadow:0 0 34px rgba(255,209,102,.18);outline:none}
+  #overlay .sig{color:#3a4254;font-size:9px;letter-spacing:.3em;text-transform:uppercase;margin-top:10px}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div id="hud" aria-hidden="true">
+  <div class="t">SYNAESTHESIA&nbsp;ENGINE</div>
+  <div class="dim">FLUID // NAVIER–STOKES&nbsp;&nbsp;·&nbsp;&nbsp;AUDIO // SYNTHESISED&nbsp;LIVE</div>
+  <div><span class="dim">BAR:BEAT&nbsp;</span><span id="counter">—:—</span><span class="dim">&nbsp;&nbsp;124&nbsp;BPM&nbsp;&nbsp;·&nbsp;&nbsp;ODE&nbsp;TO&nbsp;JOY&nbsp;(REWORKED)</span></div>
+</div>
+
+<div id="controls" hidden>
+  <button class="ctl" id="mirrorBtn" aria-pressed="false">Mirror</button>
+  <button class="ctl" id="paletteBtn">Shift palette</button>
+  <button class="ctl" id="stormBtn">Stir storm</button>
+</div>
+<div id="hint" hidden>DRAG TO DISTURB THE FLUID</div>
+
+<div id="overlay">
+  <h1>Synaesthesia Engine</h1>
+  <p>A real-time fluid simulation conducted by music that is being synthesised, note by note, from raw oscillators — no audio files, no samples. The solver knows each beat before it lands.</p>
+  <button id="begin">▶&nbsp;&nbsp;Begin</button>
+  <div class="sig">Beethoven, 1824 — remixed by code, 2026</div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+   PART 1 — FLUID: Jos Stam "stable fluids", CPU, dye in RGB
+   ============================================================ */
+const N = 108;                       // interior grid
+const SZ = (N + 2) * (N + 2);
+const IX = (i, j) => i + (N + 2) * j;
+
+const u  = new Float32Array(SZ), v  = new Float32Array(SZ);
+const u0 = new Float32Array(SZ), v0 = new Float32Array(SZ);
+const dr = new Float32Array(SZ), dg = new Float32Array(SZ), db = new Float32Array(SZ);
+const tr = new Float32Array(SZ), tg = new Float32Array(SZ), tb = new Float32Array(SZ);
+const p_ = new Float32Array(SZ), dv = new Float32Array(SZ);
+const curl = new Float32Array(SZ);
+
+function set_bnd(b, x){
+  for (let i = 1; i <= N; i++){
+    x[IX(0, i)]     = b === 1 ? -x[IX(1, i)] : x[IX(1, i)];
+    x[IX(N + 1, i)] = b === 1 ? -x[IX(N, i)] : x[IX(N, i)];
+    x[IX(i, 0)]     = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
+    x[IX(i, N + 1)] = b === 2 ? -x[IX(i, N)] : x[IX(i, N)];
+  }
+  x[IX(0,0)] = .5*(x[IX(1,0)]+x[IX(0,1)]);
+  x[IX(0,N+1)] = .5*(x[IX(1,N+1)]+x[IX(0,N)]);
+  x[IX(N+1,0)] = .5*(x[IX(N,0)]+x[IX(N+1,1)]);
+  x[IX(N+1,N+1)] = .5*(x[IX(N,N+1)]+x[IX(N+1,N)]);
+}
+
+function lin_solve(b, x, x0, a, c, iter){
+  const cInv = 1 / c;
+  for (let k = 0; k < iter; k++){
+    for (let j = 1; j <= N; j++){
+      const row = (N + 2) * j;
+      for (let i = 1; i <= N; i++){
+        const id = i + row;
+        x[id] = (x0[id] + a * (x[id-1] + x[id+1] + x[id-(N+2)] + x[id+(N+2)])) * cInv;
+      }
+    }
+    set_bnd(b, x);
+  }
+}
+
+function advect(b, d, d0, uu, vv, dt){
+  const dt0 = dt * N;
+  for (let j = 1; j <= N; j++){
+    for (let i = 1; i <= N; i++){
+      const id = IX(i, j);
+      let x = i - dt0 * uu[id], y = j - dt0 * vv[id];
+      if (x < .5) x = .5; if (x > N + .5) x = N + .5;
+      if (y < .5) y = .5; if (y > N + .5) y = N + .5;
+      const i0 = x | 0, i1 = i0 + 1, j0 = y | 0, j1 = j0 + 1;
+      const s1 = x - i0, s0 = 1 - s1, t1 = y - j0, t0 = 1 - t1;
+      d[id] = s0 * (t0 * d0[IX(i0,j0)] + t1 * d0[IX(i0,j1)])
+            + s1 * (t0 * d0[IX(i1,j0)] + t1 * d0[IX(i1,j1)]);
+    }
+  }
+  set_bnd(b, d);
+}
+
+function project(uu, vv, pp, divv){
+  const h = 1 / N;
+  for (let j = 1; j <= N; j++){
+    for (let i = 1; i <= N; i++){
+      const id = IX(i,j);
+      divv[id] = -.5 * h * (uu[id+1] - uu[id-1] + vv[id+(N+2)] - vv[id-(N+2)]);
+      pp[id] = 0;
+    }
+  }
+  set_bnd(0, divv); set_bnd(0, pp);
+  lin_solve(0, pp, divv, 1, 4, 12);
+  for (let j = 1; j <= N; j++){
+    for (let i = 1; i <= N; i++){
+      const id = IX(i,j);
+      uu[id] -= .5 * (pp[id+1] - pp[id-1]) / h;
+      vv[id] -= .5 * (pp[id+(N+2)] - pp[id-(N+2)]) / h;
+    }
+  }
+  set_bnd(1, uu); set_bnd(2, vv);
+}
+
+function vorticity(eps, dt){
+  for (let j = 1; j <= N; j++)
+    for (let i = 1; i <= N; i++)
+      curl[IX(i,j)] = .5 * ((v[IX(i+1,j)] - v[IX(i-1,j)]) - (u[IX(i,j+1)] - u[IX(i,j-1)]));
+  for (let j = 2; j < N; j++){
+    for (let i = 2; i < N; i++){
+      const id = IX(i,j);
+      let dx = Math.abs(curl[IX(i+1,j)]) - Math.abs(curl[IX(i-1,j)]);
+      let dy = Math.abs(curl[IX(i,j+1)]) - Math.abs(curl[IX(i,j-1)]);
+      const len = Math.sqrt(dx*dx + dy*dy) + 1e-5;
+      dx /= len; dy /= len;
+      u[id] += eps * dy * curl[id] * dt;
+      v[id] -= eps * dx * curl[id] * dt;
+    }
+  }
+}
+
+function fluidStep(dt){
+  vorticity(14, dt);
+  project(u, v, p_, dv);
+  u0.set(u); v0.set(v);
+  advect(1, u, u0, u0, v0, dt);
+  advect(2, v, v0, u0, v0, dt);
+  project(u, v, p_, dv);
+  tr.set(dr); tg.set(dg); tb.set(db);
+  advect(0, dr, tr, u, v, dt);
+  advect(0, dg, tg, u, v, dt);
+  advect(0, db, tb, u, v, dt);
+  const fade = 0.987;
+  for (let k = 0; k < SZ; k++){ dr[k]*=fade; dg[k]*=fade; db[k]*=fade; u[k]*=0.999; v[k]*=0.999; }
+}
+
+/* ---- injectors ---- */
+let hueBase = 210;
+function hue2rgb(h){
+  h = ((h % 360) + 360) % 360;
+  const f = n => { const k = (n + h/30) % 12; return Math.max(0, Math.min(1, Math.min(k-3, 9-k))); };
+  return [1 - f(0)*0.92, 1 - f(8)*0.92, 1 - f(4)*0.92];
+}
+function dye(cx, cy, rad, h, amt){
+  const [R,G,B] = hue2rgb(h);
+  const x0=Math.max(1,cx-rad|0), x1=Math.min(N,cx+rad|0), y0=Math.max(1,cy-rad|0), y1=Math.min(N,cy+rad|0);
+  for (let j=y0;j<=y1;j++) for (let i=x0;i<=x1;i++){
+    const dx=i-cx, dy2=j-cy, d2=dx*dx+dy2*dy2;
+    if (d2 > rad*rad) continue;
+    const w = amt * (1 - Math.sqrt(d2)/rad);
+    const id = IX(i,j);
+    dr[id]+=R*w; dg[id]+=G*w; db[id]+=B*w;
+  }
+}
+function burst(cx, cy, force, rad){
+  for (let a = 0; a < 26; a++){
+    const th = a/26 * Math.PI*2;
+    const i = Math.round(cx + Math.cos(th)*rad), j = Math.round(cy + Math.sin(th)*rad);
+    if (i<1||i>N||j<1||j>N) continue;
+    const id = IX(i,j);
+    u[id] += Math.cos(th)*force; v[id] += Math.sin(th)*force;
+  }
+}
+function jet(cx, cy, fx, fy, rad){
+  const x0=Math.max(1,cx-rad|0), x1=Math.min(N,cx+rad|0), y0=Math.max(1,cy-rad|0), y1=Math.min(N,cy+rad|0);
+  for (let j=y0;j<=y1;j++) for (let i=x0;i<=x1;i++){ const id=IX(i,j); u[id]+=fx; v[id]+=fy; }
+}
+
+/* ============================================================
+   PART 2 — AUDIO: synthesised from scratch (no files, no samples)
+   Ode to Joy, public domain (Beethoven, Symphony No. 9, 1824)
+   ============================================================ */
+let ctx = null, master, scGain, noiseBuf, delaySend;
+const BPM = 124, SPB = 60 / BPM;          // seconds per beat
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+// Melody: one note per beat. 0 = rest, negative = hold previous (sustain).
+const MELODY = [
+  64,64,65,67, 67,65,64,62, 60,60,62,64, 64,-1,62,-1,
+  64,64,65,67, 67,65,64,62, 60,60,62,64, 62,-1,60,-1
+]; // 32 beats = 8 bars
+// Bass roots per bar (C2, F2, G2):
+const ROOTS = [36,36,41,36, 43,43,36,36];
+
+function makeNoise(){
+  const b = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random()*2 - 1;
+  return b;
+}
+function initAudio(){
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  master = ctx.createDynamicsCompressor();
+  master.threshold.value = -14; master.ratio.value = 5;
+  master.connect(ctx.destination);
+  scGain = ctx.createGain(); scGain.connect(master);   // sidechained bus
+  noiseBuf = makeNoise();
+  delaySend = ctx.createDelay(1); delaySend.delayTime.value = SPB * 0.75;
+  const fb = ctx.createGain(); fb.gain.value = 0.34;
+  const dampen = ctx.createBiquadFilter(); dampen.type='lowpass'; dampen.frequency.value = 2600;
+  delaySend.connect(fb); fb.connect(dampen); dampen.connect(delaySend);
+  const wet = ctx.createGain(); wet.gain.value = 0.5;
+  delaySend.connect(wet); wet.connect(scGain);
+}
+function env(g, t, a, peak, rel){
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(peak, t + a);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + a + rel);
+}
+function kick(t){
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.setValueAtTime(165, t);
+  o.frequency.exponentialRampToValueAtTime(44, t + 0.11);
+  env(g, t, 0.002, 1.05, 0.30);
+  o.connect(g); g.connect(master);
+  o.start(t); o.stop(t + 0.35);
+  // sidechain duck on the melodic bus
+  scGain.gain.cancelScheduledValues(t);
+  scGain.gain.setValueAtTime(1, t);
+  scGain.gain.linearRampToValueAtTime(0.30, t + 0.02);
+  scGain.gain.exponentialRampToValueAtTime(1, t + SPB * 0.85);
+}
+function clap(t){
+  for (let r = 0; r < 3; r++){
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value = 1850; f.Q.value = 1.1;
+    const g = ctx.createGain();
+    env(g, t + r*0.012, 0.001, 0.4 - r*0.1, 0.14);
+    s.connect(f); f.connect(g); g.connect(master);
+    s.start(t + r*0.012); s.stop(t + r*0.012 + 0.2);
+  }
+}
+function hat(t, open){
+  const s = ctx.createBufferSource(); s.buffer = noiseBuf;
+  const f = ctx.createBiquadFilter(); f.type='highpass'; f.frequency.value = 8200;
+  const g = ctx.createGain();
+  env(g, t, 0.001, open ? 0.22 : 0.12, open ? 0.12 : 0.04);
+  s.connect(f); f.connect(g); g.connect(master);
+  s.start(t); s.stop(t + 0.2);
+}
+function bass(t, midi){
+  const o = ctx.createOscillator(); o.type = 'sawtooth';
+  o.frequency.value = mtof(midi);
+  const f = ctx.createBiquadFilter(); f.type='lowpass'; f.Q.value = 9;
+  f.frequency.setValueAtTime(1500, t);
+  f.frequency.exponentialRampToValueAtTime(170, t + SPB*0.45);
+  const g = ctx.createGain();
+  env(g, t, 0.004, 0.34, SPB*0.5);
+  o.connect(f); f.connect(g); g.connect(scGain);
+  o.start(t); o.stop(t + SPB*0.6);
+}
+function lead(t, midi, dur){
+  const g = ctx.createGain();
+  const f = ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 3800; f.Q.value = 0.8;
+  env(g, t, 0.012, 0.17, dur + 0.22);
+  [0, 8, -7].forEach(cents => {
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.value = mtof(midi); o.detune.value = cents;
+    o.connect(f); o.start(t); o.stop(t + dur + 0.3);
+  });
+  f.connect(g); g.connect(scGain); g.connect(delaySend);
+}
+
+/* ---- scheduler: the engine knows the future ---- */
+let stepIdx = 0, nextT = 0, running = false;
+const vq = [];   // visual event queue, time-sorted by construction
+function scheduleStep(s, t){
+  const beat = (s >> 1) % 4, bar = (s >> 3) % 8, eighthOff = s & 1;
+  if (!eighthOff){
+    kick(t); vq.push({t, k:'kick'});
+    if (beat === 1 || beat === 3){ clap(t); vq.push({t, k:'clap'}); }
+    const gBeat = (s >> 1) % 32;
+    const m = MELODY[gBeat];
+    if (m > 0){
+      // hold detection: count following -1s
+      let hold = 1;
+      while (MELODY[(gBeat + hold) % 32] === -1) hold++;
+      lead(t, m + 12, SPB * hold * 0.9);
+      vq.push({t, k:'note', m});
+    }
+    if (beat === 0) vq.push({t, k:'bar', bar});
+  } else {
+    hat(t, beat === 1 || beat === 3);
+    vq.push({t, k:'hat'});
+  }
+  bass(t, ROOTS[bar] + (eighthOff ? 12 : 0));
+}
+function scheduler(){
+  if (!running) return;
+  while (nextT < ctx.currentTime + 0.14){
+    scheduleStep(stepIdx, nextT);
+    nextT += SPB / 2;
+    stepIdx++;
+  }
+  setTimeout(scheduler, 26);
+}
+
+/* ============================================================
+   PART 3 — RENDER + CONDUCTING (audio events → physics)
+   ============================================================ */
+const stage = document.getElementById('stage');
+const g2d = stage.getContext('2d');
+const off = document.createElement('canvas');
+off.width = off.height = N + 2;
+const og = off.getContext('2d');
+const img = og.createImageData(N + 2, N + 2);
+let mirror = false, lastFrame = 0, barNow = 0, beatNow = 0;
+const counterEl = document.getElementById('counter');
+
+function resize(){ stage.width = innerWidth * devicePixelRatio; stage.height = innerHeight * devicePixelRatio; }
+addEventListener('resize', resize); resize();
+
+function conduct(){
+  const now = ctx.currentTime + 0.015;
+  while (vq.length && vq[0].t <= now){
+    const e = vq.shift();
+    if (e.k === 'kick'){
+      const cx = N*0.5 + (Math.random()*10-5), cy = N*0.58;
+      burst(cx, cy, 5.2, 4);
+      dye(cx, cy, 9, hueBase, 0.9);
+      beatNow = (beatNow % 4) + 1;
+      counterEl.textContent = (barNow+1) + ':' + beatNow;
+    } else if (e.k === 'clap'){
+      jet(6, N*0.45, 7.5, -1.2, 3);  dye(7, N*0.45, 6, hueBase + 140, 0.7);
+      jet(N-6, N*0.45, -7.5, -1.2, 3); dye(N-7, N*0.45, 6, hueBase + 140, 0.7);
+    } else if (e.k === 'hat'){
+      const x = 8 + Math.random()*(N-16), y = 6 + Math.random()*12;
+      dye(x, y, 2.5, hueBase + 55, 0.32); jet(x, y, 0, 1.6, 2);
+    } else if (e.k === 'note'){
+      const x = 8 + ((e.m - 60) / 8) * (N - 16);
+      jet(x, N*0.2, 0, 3.4, 3);
+      dye(x, N*0.22, 6, hueBase + 36 + (e.m % 12) * 9, 0.85);
+    } else if (e.k === 'bar'){
+      barNow = e.bar; beatNow = 0;
+      hueBase += 19;
+      if (e.bar % 4 === 0){ // big phrase swirl
+        for (let a = 0; a < 30; a++){
+          const th = a/30*Math.PI*2, R = N*0.34;
+          const i = N/2 + Math.cos(th)*R | 0, j = N/2 + Math.sin(th)*R | 0;
+          if (i>0&&i<=N&&j>0&&j<=N){ const id=IX(i,j); u[id]+=-Math.sin(th)*3.4; v[id]+=Math.cos(th)*3.4; }
+        }
+      }
+    }
+  }
+}
+
+function render(){
+  const d = img.data;
+  for (let j = 0; j < N + 2; j++){
+    for (let i = 0; i < N + 2; i++){
+      const id = IX(i, j), px = id * 4;
+      d[px]   = Math.min(255, dr[id] * 290);
+      d[px+1] = Math.min(255, dg[id] * 290);
+      d[px+2] = Math.min(255, db[id] * 290);
+      d[px+3] = 255;
+    }
+  }
+  og.putImageData(img, 0, 0);
+  g2d.imageSmoothingEnabled = true;
+  g2d.imageSmoothingQuality = 'high';
+  g2d.globalCompositeOperation = 'source-over';
+  g2d.fillStyle = '#06070a';
+  g2d.fillRect(0, 0, stage.width, stage.height);
+  g2d.globalCompositeOperation = 'lighter';
+  g2d.drawImage(off, 0, 0, stage.width, stage.height);
+  if (mirror){
+    g2d.save();
+    g2d.translate(stage.width, 0); g2d.scale(-1, 1);
+    g2d.globalAlpha = 0.55;
+    g2d.drawImage(off, 0, 0, stage.width, stage.height);
+    g2d.restore();
+    g2d.globalAlpha = 1;
+  }
+}
+
+function loop(ts){
+  if (!running) return;
+  const dt = Math.min(0.033, (ts - lastFrame) / 1000 || 0.016);
+  lastFrame = ts;
+  conduct();
+  fluidStep(dt * 0.9);
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* ---- pointer = you, disturbing the field ---- */
+let px = -1, py = -1, down = false;
+function toGrid(e){
+  const r = stage.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+  return [cx / r.width * N, cy / r.height * N];
+}
+function stir(e){
+  if (!running) return;
+  const [gx, gy] = toGrid(e);
+  if (px >= 0){
+    const fx = (gx - px) * 2.2, fy = (gy - py) * 2.2;
+    jet(gx, gy, fx, fy, 2);
+    if (down || e.touches) dye(gx, gy, 4, hueBase + 80, 0.5);
+  }
+  px = gx; py = gy;
+}
+stage.addEventListener('pointermove', stir);
+stage.addEventListener('pointerdown', e => { down = true; stir(e); });
+addEventListener('pointerup', () => { down = false; });
+stage.addEventListener('touchmove', e => { e.preventDefault(); stir(e); }, {passive:false});
+
+/* ---- controls ---- */
+document.getElementById('mirrorBtn').addEventListener('click', function(){
+  mirror = !mirror; this.setAttribute('aria-pressed', mirror);
+});
+document.getElementById('paletteBtn').addEventListener('click', () => { hueBase += 97; });
+document.getElementById('stormBtn').addEventListener('click', () => {
+  for (let k = 0; k < 8; k++){
+    const x = 10 + Math.random()*(N-20), y = 10 + Math.random()*(N-20);
+    burst(x, y, 6, 5); dye(x, y, 8, hueBase + Math.random()*120, 0.8);
+  }
+});
+
+/* ---- ignition ---- */
+document.getElementById('begin').addEventListener('click', () => {
+  initAudio();
+  ctx.resume().then(() => {
+    nextT = ctx.currentTime + 0.1;
+    running = true;
+    document.getElementById('overlay').classList.add('gone');
+    document.getElementById('controls').hidden = false;
+    document.getElementById('hint').hidden = false;
+    // opening state: a quiet nebula to be shattered by bar 1
+    dye(N*0.5, N*0.55, 16, hueBase, 0.5);
+    scheduler();
+    requestAnimationFrame(loop);
+  });
+});
+</script>
+</body>
+</html>
