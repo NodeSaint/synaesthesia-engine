@@ -9,3 +9,4 @@ All notable changes to this project are documented here.
 - Added `README.md`, `CHANGELOG.md`, `PRIMER.md`, `LICENSE`, and `.gitignore`.
 - Created public GitHub repository `nodesaint/synaesthesia-engine`.
 - Enabled GitHub Pages (served from `main` branch, root).
+- Rewrote `README.md` — trimmed to essentials, then opened with a hook to draw the reader in.
